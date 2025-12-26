@@ -72,7 +72,7 @@
                 linear-gradient(to bottom, #0a151a 0%, #000000 100%);
             display: none;
         }
-        /* 雪花画布 - 层级调整，确保不遮挡点击 */
+        /* 雪花画布 */
         #snow-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; opacity: 0.8; z-index: 1; }
 
         /* --- 图标系统 --- */
@@ -419,17 +419,14 @@
     </div>
 
     <script>
-        // 【工程修正】：为了防止你在 Github 上泄露 Key，建议保留为空。
-        // 代码会自动检测，如果为空则切换到“本地脚本模式”，保证游戏流程正常进行。
         const apiKey = ""; 
-        
         const state = {
             booted: false, audioCtx: null, dragItem: null, dragOffset: {x:0, y:0}, zIndex: 100,
             inventory: { apple: false, paper: false, ribbon: false },
             isGiftAssembled: false, isGiftSent: false,
+            endingTriggered: false,
             currentRestoreFile: null, isRestoring: false,
             chatHistory: [],
-            // 音频严格控制
             bgmPlaying: false,
             currentSongIndex: 0,
             noteTimeout: null
@@ -441,7 +438,6 @@
             'file_ribbon': { name: 'RIBBON.GIF (错误)', itemKey: 'ribbon', itemName: '金色拉花', svg: `<svg viewBox="0 0 100 100"><path d="M20 80 Q50 20 80 80" fill="none" stroke="gold" stroke-width="10"/><path d="M20 50 Q50 80 80 50" fill="none" stroke="goldenrod" stroke-width="5"/></svg>` }
         };
 
-        // 曲库
         const playlist = [
             { title: "♪ 刀郎 - 2002年的第一场雪 ♪", notes: [{f:329.6,d:0.5},{f:392.0,d:0.5},{f:440.0,d:0.5},{f:523.3,d:1.0},{f:440.0,d:0.5},{f:392.0,d:0.5},{f:329.6,d:1.5},{f:293.7,d:0.5},{f:329.6,d:0.5},{f:261.6,d:2.0}] },
             { title: "♪ 周杰伦 - 安静 (Piano) ♪", notes: [{f:261.6,d:0.4},{f:329.6,d:0.4},{f:392.0,d:0.4},{f:329.6,d:0.4},{f:293.7,d:0.4},{f:349.2,d:0.4},{f:440.0,d:0.4},{f:349.2,d:0.4},{f:261.6,d:0.4},{f:329.6,d:0.4},{f:392.0,d:0.4},{f:329.6,d:0.4},{f:246.9,d:1.0}] },
@@ -457,7 +453,7 @@
             document.getElementById('desktop').style.display = 'block';
             try { state.audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch(e){}
             playBootSound();
-            playBGM(); // 启动默认音乐
+            playBGM(); 
             setInterval(() => { const now=new Date(); document.getElementById('clock').innerText=`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`; }, 1000);
             renderFiles();
             requestAnimationFrame(drawSnow);
@@ -467,81 +463,57 @@
                 document.getElementById('chat-input').disabled=false;
                 document.getElementById('chat-input').placeholder="输入消息...";
                 openWindow('chat');
-                addChatMessage('them', '往事随风', '你终于上线了。圣诞快乐！^_^');
+                addChatMessage('sys', '系统', '连接成功。对方状态：在线。');
+                setTimeout(() => addChatMessage('them', '往事随风', '你终于上线了！等你半天了，这破网速 [晕]'), 2000);
             }, 2000);
         }
 
-        // --- 音频引擎 (Strict) ---
+        // --- BGM ---
         function playBGM() {
             if(!state.audioCtx) return;
-            // 如果已经被标记为播放中，不需重复启动（防止重叠）
-            // 但如果 noteTimeout 为空（说明之前的播放结束或被清除），则允许启动
             if(state.bgmPlaying && state.noteTimeout) return; 
-
             state.bgmPlaying = true;
             document.getElementById('btn-play').innerText = "||";
-            
             let noteIndex = 0;
-            
             const scheduleNote = () => {
-                // 双重检查：如果用户暂停了，立即停止递归
                 if(!state.bgmPlaying) return; 
-                
                 const song = playlist[state.currentSongIndex];
                 if(noteIndex >= song.notes.length) noteIndex = 0;
-                
                 const note = song.notes[noteIndex];
                 const t = state.audioCtx.currentTime;
                 const osc = state.audioCtx.createOscillator();
                 const gain = state.audioCtx.createGain();
-                
                 osc.type = 'sine'; osc.frequency.value = note.f;
                 gain.gain.setValueAtTime(0, t);
                 gain.gain.linearRampToValueAtTime(0.1, t + 0.05);
                 gain.gain.exponentialRampToValueAtTime(0.001, t + note.d);
-                
                 osc.connect(gain); gain.connect(state.audioCtx.destination);
                 osc.start(t); osc.stop(t + note.d);
-                
-                // 关键修正：保存 timeout ID 以便清除
                 state.noteTimeout = setTimeout(scheduleNote, note.d * 1000);
                 noteIndex++;
             };
             scheduleNote();
         }
-
         function toggleMusic() {
             if(state.audioCtx && state.audioCtx.state === 'suspended') state.audioCtx.resume();
-            
             if(state.bgmPlaying) {
-                // 暂停：清除状态和定时器
                 state.bgmPlaying = false;
                 if(state.noteTimeout) { clearTimeout(state.noteTimeout); state.noteTimeout = null; }
                 document.getElementById('btn-play').innerText = ">";
-            } else {
-                // 播放
-                playBGM();
-            }
+            } else { playBGM(); }
         }
-
         function changeSong(index) {
-            // 切歌时先强制停止当前播放
             state.bgmPlaying = false;
             if(state.noteTimeout) { clearTimeout(state.noteTimeout); state.noteTimeout = null; }
-            
             state.currentSongIndex = index;
             document.getElementById('music-title').innerText = playlist[index].title;
             document.getElementById('playlist-index').innerText = index + 1;
-            
-            // 稍作延迟后自动开始新歌
-            setTimeout(() => {
-                playBGM();
-            }, 100);
+            setTimeout(() => { playBGM(); }, 100);
         }
         function nextSong() { changeSong((state.currentSongIndex + 1) % playlist.length); }
         function prevSong() { changeSong((state.currentSongIndex - 1 + playlist.length) % playlist.length); }
 
-        // --- 聊天逻辑 (重构版：增加鲁棒性和本地回退) ---
+        // --- Chat Logic ---
         async function sendChat() {
             const input = document.getElementById('chat-input');
             const txt = input.value.trim();
@@ -550,41 +522,29 @@
             addChatMessage('me', '似水流年', txt);
             input.value=''; input.disabled=true; input.placeholder="对方正在输入...";
             
-            // 记录用户消息
             state.chatHistory.push({role:"user", parts:[{text:txt}]});
 
-            // 1. 检查是否刚刚发送了礼物 (触发剧情关键点)
-            // 如果礼物刚送出，强制进入结局引导，无论是否有 API
             if(state.isGiftSent && !state.endingTriggered) {
-                state.endingTriggered = true; // 防止重复
+                state.endingTriggered = true; 
                 setTimeout(()=>{
-                    const reply = "！！！\n你...你真的做了这个给我？\n谢谢你...似水流年。\n我收到了，这是我今年收到的唯一的礼物。\n[难过] [微笑]";
+                    const reply = "！！！\n天哪...这真的是给我的？\n谢谢你，似水流年... [流泪]\n这是我今年收到最好的礼物。";
                     addChatMessage('them', '往事随风', reply);
                     state.chatHistory.push({role:"model", parts:[{text:reply}]});
-                    setTimeout(endGame, 6000); // 6秒后进入结局
-                }, 1500);
+                    setTimeout(endGame, 6000); 
+                }, 2000);
                 input.disabled=false; input.placeholder="输入消息..."; input.focus();
                 return;
             }
 
-            // 2. 尝试调用 Gemini API
             if(apiKey && apiKey.length > 10) {
                 let prompt = "你叫'往事随风'，2002年12月24日网吧上网的忧郁网友。你的聊天对象是穿越来的网友'似水流年'。不知道未来。说话要简短(15字内)，带2000年代网络特色(如: 886, MM, 晕)。不要用括号描述表情，用关键词 [微笑] [难过] [惊讶] 来触发系统表情。";
-                
                 try {
                     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
                         method:'POST', headers:{'Content-Type':'application/json'},
                         body:JSON.stringify({contents:state.chatHistory, systemInstruction:{parts:[{text:prompt}]}})
                     });
-                    
                     const d = await res.json();
-                    
-                    // 检查 API 是否返回了错误 (例如 Key 无效)
-                    if(d.error) {
-                        console.warn("API Error:", d.error);
-                        throw new Error("API_FAIL"); 
-                    }
-
+                    if(d.error) throw new Error("API_FAIL");
                     const rep = d.candidates?.[0]?.content?.parts?.[0]?.text;
                     if(rep) {
                         setTimeout(()=>{ 
@@ -592,44 +552,40 @@
                             state.chatHistory.push({role:"model", parts:[{text:rep}]});
                         }, 1000);
                         input.disabled=false; input.placeholder="输入消息..."; input.focus();
-                        return; // API 成功，直接返回
+                        return; 
                     }
-                } catch(e){ 
-                    console.log("切换到本地模式");
-                    // 失败则落入下方的本地逻辑
-                }
+                } catch(e){ console.log("Falling back to local"); }
             }
 
-            // 3. 本地兜底逻辑 (Local Fallback Engine)
-            // 当没有 API Key 或 API 失败时，使用简单的关键词匹配，保证游戏可玩性
             setTimeout(() => {
                 const fallbackReply = getLocalReply(txt);
                 addChatMessage('them', '往事随风', fallbackReply);
                 state.chatHistory.push({role:"model", parts:[{text:fallbackReply}]});
-                
                 input.disabled=false; input.placeholder="输入消息..."; input.focus();
             }, 1000 + Math.random() * 1000);
         }
 
-        // 本地对话库：极其精确的规则匹配
         function getLocalReply(text) {
             const t = text.toLowerCase();
-            if(t.includes("你好") || t.includes("在吗") || t.includes("hi")) return "来了。今晚网速好慢... [微笑]";
-            if(t.includes("是谁") || t.includes("名字")) return "我是往事随风啊，你忘了？晕...";
-            if(t.includes("圣诞") || t.includes("快乐")) return "圣诞快乐。虽然只有我一个人在网吧... [难过]";
-            if(t.includes("礼物") || t.includes("平安果")) return "礼物？别逗我了，谁会给我送礼物啊。";
-            if(t.includes("穿越") || t.includes("未来")) return "你在说什么呢？科幻片看多了吧 GG。";
-            if(t.includes("雪")) return "是啊，外面雪好大。好冷。";
-            if(t.includes("歌") || t.includes("听")) return "我也在听歌。刀郎的歌虽然土，但挺带劲的。";
-            if(t.includes("88") || t.includes("再见")) return "886。";
+            if(t.includes("你好") || t.includes("在吗") || t.includes("hi")) return "在呢在呢。今晚网吧爆满，好不容易抢到机子。";
+            if(t.includes("是谁") || t.includes("名字")) return "我是往事随风啊，晕，你失忆了？[惊讶]";
+            if(t.includes("圣诞") || t.includes("快乐")) return "同乐同乐！虽然只有我一个人在网吧吃泡面... [难过]";
+            if(t.includes("礼物") || t.includes("平安果")) return "礼物？别逗我了，今年圣诞没人理我。";
+            if(t.includes("穿越") || t.includes("未来")) return "你在说什么呢？《黑客帝国》看多了吧 GG。";
+            if(t.includes("雪")) return "是啊，外面雪好大。我想出去堆雪人，但太冷了。";
+            if(t.includes("歌") || t.includes("听")) return "这首刀郎的歌特好听，你也听听？";
+            if(t.includes("ai") || t.includes("机器人")) return "什么AI？我是大活人！你才是机器人呢 [抓狂]";
+            if(t.includes("88") || t.includes("再见")) return "886，有空常联系！";
+            if(t.includes("难过") || t.includes("孤独")) return "没事，习惯了。有你陪我聊聊挺好的。[微笑]";
             
-            // 默认随机回复
             const defaults = [
-                "网有点卡...",
-                "刚在打CS，没看到。",
-                "唉，好无聊。",
-                "你那边冷吗？",
-                "..."
+                "网有点卡...刚才掉线了。",
+                "刚在打CS，没看到消息。",
+                "唉，好无聊啊，想下机了。",
+                "你那边冷吗？我手都冻僵了。",
+                "不知道为什么，今晚特别想家。",
+                "呵呵。",
+                "晕，OICQ又报错了。"
             ];
             return defaults[Math.floor(Math.random() * defaults.length)];
         }
@@ -638,10 +594,8 @@
         function addChatMessage(role, name, text) {
             const box = document.getElementById('chat-box');
             const t = `[${String(new Date().getHours()).padStart(2,'0')}:${String(new Date().getMinutes()).padStart(2,'0')}]`;
-            const emojis = {'\\[微笑\\]':'🙂', '\\[难过\\]':'🙁', '\\[惊讶\\]':'😮'}; 
-            let h = text; 
-            // 换行符处理
-            h = h.replace(/\n/g, '<br>');
+            const emojis = {'\\[微笑\\]':'🙂', '\\[难过\\]':'🙁', '\\[惊讶\\]':'😮', '\\[流泪\\]':'😭', '\\[抓狂\\]':'😫'}; 
+            let h = text.replace(/\n/g, '<br>');
             for(let k in emojis) h=h.replace(new RegExp(k,'g'), emojis[k]);
             const d = document.createElement('div'); d.className=`chat-msg ${role}`;
             d.innerHTML = role==='sys'?text:`<span class="time">${t}</span> ${name}: ${h}`;
@@ -649,36 +603,6 @@
             if(role==='them') playTone(800,'sine',0.1);
         }
 
-        // ... existing code (openWindow, closeWindow, etc.) ...
-        
-        // 修正 sendGift 逻辑，确保状态正确传递
-        function sendGift() { 
-            if(state.isGiftSent) return; 
-            state.isGiftSent=true; 
-            document.getElementById('transfer-modal').classList.remove('hidden'); 
-            let p=0; 
-            const t=setInterval(()=>{ 
-                p+=1; 
-                document.getElementById('transfer-bar').style.width=p+'%'; 
-                document.getElementById('transfer-time').innerText=Math.ceil((100-p)/10)+'s'; 
-                if(p>=100){ 
-                    clearInterval(t); 
-                    document.getElementById('transfer-modal').classList.add('hidden'); 
-                    openWindow('chat'); 
-                    // 这里不直接触发 AI 回复，而是发送系统消息，让 sendChat 的逻辑去捕获状态
-                    addChatMessage('me','似水流年','[文件发送] Christmas_Apple.zip'); 
-                    state.chatHistory.push({role:"user", parts:[{text:"[系统: 对方已成功接收文件 Christmas_Apple.zip]"}]});
-                    // 模拟对方收到后的反应 (手动调用sendChat流程)
-                    // 注意：这里的 sendChat 已经被上面的逻辑接管，因为它检测 state.isGiftSent
-                    setTimeout(() => {
-                        // 无论有无API，这里都会触发剧情
-                        sendChat(); 
-                    }, 1000);
-                } 
-            }, 50); 
-        }
-
-        // --- 窗口 ---
         function openWindow(id) {
             const w=document.getElementById('win-'+id);
             if(w.classList.contains('hidden')) { w.classList.remove('hidden'); w.style.top=(60+Math.random()*40)+'px'; w.style.left=(60+Math.random()*40)+'px'; playTone(600,'sine',0.05); }
@@ -690,7 +614,6 @@
         window.addEventListener('mousemove', e=>{ if(state.dragItem){ state.dragItem.style.left=(e.clientX-state.dragOffset.x)+'px'; state.dragItem.style.top=(e.clientY-state.dragOffset.y)+'px'; } if(state.isRestoring) handleScratch(e); });
         window.addEventListener('mouseup', ()=>{ state.dragItem=null; if(state.isRestoring){ state.isRestoring=false; checkScratch(); } });
 
-        // --- 玩法 ---
         function renderFiles() {
             const c=document.getElementById('file-list-container'); c.innerHTML='';
             Object.keys(filesData).forEach(k=>{
@@ -715,6 +638,7 @@
             if(Object.values(state.inventory).every(x=>x)) { document.getElementById('btn-assemble').disabled=false; document.getElementById('btn-assemble').innerText="开始合成平安果"; document.getElementById('btn-assemble').style.color="black"; document.getElementById('maker-status').innerHTML="<span style='color:blue'>素材就绪。</span>"; }
         }
         function assemble() { const b=document.getElementById('btn-assemble'); b.innerText="合成中..."; let p=0; const t=setInterval(()=>{ p+=5; b.style.background=`linear-gradient(90deg, #0f0 ${p}%, #e0e0e0 ${p}%)`; if(p>=100){ clearInterval(t); state.isGiftAssembled=true; document.getElementById('maker-slots').classList.add('hidden'); document.getElementById('btn-assemble').classList.add('hidden'); document.getElementById('final-gift-display').classList.remove('hidden'); document.getElementById('btn-send-gift').classList.remove('hidden'); } }, 100); playTone(400,'triangle',0.5); }
+        function sendGift() { if(state.isGiftSent) return; state.isGiftSent=true; document.getElementById('transfer-modal').classList.remove('hidden'); let p=0; const t=setInterval(()=>{ p+=1; document.getElementById('transfer-bar').style.width=p+'%'; document.getElementById('transfer-time').innerText=Math.ceil((100-p)/10)+'s'; if(p>=100){ clearInterval(t); document.getElementById('transfer-modal').classList.add('hidden'); openWindow('chat'); addChatMessage('me','似水流年','[文件发送] Christmas_Apple.zip'); state.chatHistory.push({role:"user", parts:[{text:"[系统: 对方已成功接收文件 Christmas_Apple.zip]"}]}); setTimeout(()=>{ sendChat(); }, 1000); } }, 50); }
         function endGame() { document.getElementById('desktop').style.filter="grayscale(100%) blur(5px)"; setTimeout(()=>{ document.getElementById('desktop').style.display='none'; document.getElementById('ending').classList.remove('hidden'); }, 2000); }
 
         function playTone(f,t,d) { if(!state.audioCtx) return; const o=state.audioCtx.createOscillator(), g=state.audioCtx.createGain(); o.type=t; o.frequency.value=f; o.connect(g); g.connect(state.audioCtx.destination); o.start(); g.gain.exponentialRampToValueAtTime(0.001, state.audioCtx.currentTime+d); o.stop(state.audioCtx.currentTime+d); }
